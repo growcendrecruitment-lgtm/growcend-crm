@@ -114,7 +114,7 @@ Last command se **Super Admin login** banta hai. Baaki sab employees ki login CR
 ## 8. PM2 se CRM ko 24x7 chalayein
 
 ```bash
-pm2 start deploy/ecosystem.config.cjs
+pm2 start ecosystem.config.cjs
 pm2 save
 pm2 startup     # jo command ye print kare, use copy karke run karein
 pm2 logs growcend-crm   # "MongoDB Connected" dikhna chahiye. Bahar aane ke liye Ctrl+C
@@ -125,7 +125,7 @@ pm2 logs growcend-crm   # "MongoDB Connected" dikhna chahiye. Bahar aane ke liye
 ## 9. Nginx (domain se open karne ke liye)
 
 ```bash
-cp deploy/nginx-growcend.conf /etc/nginx/sites-available/growcend
+cp nginx-growcend.conf /etc/nginx/sites-available/growcend
 nano /etc/nginx/sites-available/growcend     # crm.yourdomain.com ko apne domain se replace karein
 ln -s /etc/nginx/sites-available/growcend /etc/nginx/sites-enabled/
 rm -f /etc/nginx/sites-enabled/default

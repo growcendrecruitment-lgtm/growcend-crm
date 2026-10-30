@@ -5,7 +5,7 @@
 | Kaam | Free service | Limit |
 |---|---|---|
 | Code rakhna | GitHub (private repo) | Free |
-| Database | MongoDB Atlas M0 | 512 MB — 1000 log ka data ~1–2 MB hi leta hai, lakhs records aa jayenge |
+| Database | MongoDB Atlas M0 | 512 MB — 5000 log ka data ~5–10 MB hi leta hai, 1–2 lakh records tak aaram se |
 | Website chalana | Render.com Free Web Service | 15 min koi use na kare to so jata hai, pehli baar khulne me ~1 min lagta hai |
 | Link | `growcend-crm.onrender.com` | Free (apna domain baad me jod sakte hain) |
 
@@ -20,7 +20,7 @@ Computer par kuch install karne ki zaroorat **nahi** hai — sab browser se hoga
 1. https://github.com par free account banayein.
 2. Upar **+ → New repository** → naam `growcend-crm` → **Private** select karein → **Create repository**.
 3. Next page par **"uploading an existing file"** link par click karein.
-4. `growcend-crm` folder ke **andar ki saari files aur folders** (src, deploy, server.js, package.json…) drag-drop karein.
+4. `growcend-crm-FINAL` folder ke **andar ki saari files** (Ctrl+A) drag-drop karein. Isme koi folder nahi hai.
    - `.gitignore` aur `.env.example` hidden dikh sakti hain — na jayein to koi baat nahi.
 5. Neeche **Commit changes** dabayein.
 

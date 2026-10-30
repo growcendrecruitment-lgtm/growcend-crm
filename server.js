@@ -64,6 +64,11 @@ const leadSchema = new mongoose.Schema({
   assignedTo: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
 }, { timestamps: true });
 
+// Indexes keep search/list fast even with lakhs of records
+leadSchema.index({ createdAt: -1 });
+leadSchema.index({ status: 1, createdAt: -1 });
+leadSchema.index({ phone: 1 });
+
 const counterSchema = new mongoose.Schema({ _id: String, seq: { type: Number, default: 1000 } });
 const Counter = mongoose.models.Counter || mongoose.model('Counter', counterSchema);
 
@@ -156,15 +161,22 @@ app.patch('/api/users/:id', auth, allow('super_admin'), async (req, res) => {
 });
 
 // ---------- Leads / Candidates ----------
+// Paginated list: /api/leads?q=ramesh&status=Visa Approved,Travel Booked&page=1&limit=50
 app.get('/api/leads', auth, async (req, res) => {
-  const { q } = req.query;
+  const { q, status } = req.query;
+  const page = Math.max(1, parseInt(req.query.page) || 1);
+  const limit = Math.min(200, Math.max(1, parseInt(req.query.limit) || 50));
   const filter = {};
   if (q) {
     const rx = new RegExp(String(q).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
     filter.$or = [{ name: rx }, { phone: rx }, { leadId: rx }, { country: rx }, { job: rx }];
   }
-  const leads = await Lead.find(filter).sort({ createdAt: -1 }).limit(500).populate('createdBy', 'name');
-  res.json(leads);
+  if (status) filter.status = { $in: String(status).split(',') };
+  const [items, total] = await Promise.all([
+    Lead.find(filter).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).populate('createdBy', 'name'),
+    Lead.countDocuments(filter)
+  ]);
+  res.json({ items, total, page, pages: Math.max(1, Math.ceil(total / limit)) });
 });
 
 app.get('/api/leads/stats', auth, async (req, res) => {
