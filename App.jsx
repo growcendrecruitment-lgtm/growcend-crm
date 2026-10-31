@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Building2, Users as UsersIcon, PhoneCall, FileText, IndianRupee, Globe, Plane, Briefcase, LogOut,
-  UserPlus, CalendarClock, Settings as SettingsIcon, Menu, X, KeyRound, Eye
+  UserPlus, CalendarClock, Settings as SettingsIcon, Menu, X, KeyRound, Eye, ClipboardList
 } from 'lucide-react';
 import { api, getToken, setToken } from './api';
 import { AppCtx, go } from './ui';
@@ -12,8 +12,9 @@ import CandidateDetail from './CandidateDetail';
 import Invoice from './Invoice';
 import { Dashboard, Telecalling, TeamView } from './Pages';
 import Agents from './Agents';
+import Demands, { DemandDetail, NewDemand } from './Demands';
 import { Accounts, Settings, Users } from './Admin';
-import { ROLE_INFO, ROLES, CAN_CREATE, CAN_PAY, AGENT_CREATE, AGENT_MANAGE } from './constants.js';
+import { ROLE_INFO, ROLES, CAN_CREATE, CAN_PAY, AGENT_CREATE, AGENT_MANAGE, DEMAND_MANAGE, DEMAND_ASSIGNABLE } from './constants.js';
 
 const NAV = [
   { path: '/', label: 'Dashboard', icon: Building2, roles: ROLES },
@@ -22,6 +23,7 @@ const NAV = [
   { path: '/followups', label: "Today's Follow-ups", icon: CalendarClock, roles: ['super_admin', 'telecaller', 'counsellor', 'b2b', 'hr'] },
   { path: '/telecalling', label: 'Telecalling Station', icon: PhoneCall, roles: ['super_admin', 'telecaller', 'counsellor', 'b2b'] },
   { path: '/vault', label: 'Documentation Desk', icon: FileText, roles: ['super_admin', 'documentation'] },
+  { path: '/demands', label: 'Job Demands', icon: ClipboardList, roles: [...DEMAND_MANAGE, ...DEMAND_ASSIGNABLE] },
   { path: '/agents', label: 'B2B Agent Register', icon: Briefcase, roles: AGENT_CREATE, badge: 'agents' },
   { path: '/team', label: 'Team Monitoring (View)', icon: Eye, roles: ['super_admin', 'b2b'] },
   { path: '/accounts', label: 'Bills & Payments', icon: IndianRupee, roles: [...new Set(['super_admin', ...CAN_PAY])] },
@@ -78,6 +80,8 @@ function Shell({ user, onLogout }) {
   let page;
   if (parts[0] === 'candidate' && parts[1]) page = <CandidateDetail key={parts[1]} id={parts[1]} tab={parts[2] || 'profile'} />;
   else if (parts[0] === 'invoice' && parts[1]) page = <Invoice id={parts[1]} />;
+  else if (parts[0] === 'demand' && parts[1] === 'new') page = DEMAND_MANAGE.includes(user.role) ? <NewDemand /> : <div className="p-10 text-center text-sm text-rose-700">Only HR / Director can create demands.</div>;
+  else if (parts[0] === 'demand' && parts[1]) page = <DemandDetail key={parts[1]} id={parts[1]} tab={parts[2] || 'overview'} />;
   else if (!allowed('/' + (parts[0] || ''))) page = <div className="p-10 text-center text-sm text-rose-700">Permission denied for your role.</div>;
   else switch (parts[0]) {
     case 'candidates': page = (
@@ -96,6 +100,7 @@ function Shell({ user, onLogout }) {
         <CandidateList inDoc />
       </div>); break;
     case 'agents': page = <Agents />; break;
+    case 'demands': page = <Demands />; break;
     case 'team': page = <TeamView />; break;
     case 'accounts': page = <Accounts />; break;
     case 'users': page = <Users />; break;

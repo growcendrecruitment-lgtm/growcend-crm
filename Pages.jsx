@@ -3,7 +3,7 @@ import { Users, CalendarClock, IndianRupee, AlertTriangle, CheckCircle2, Plane, 
 import { api } from './api';
 import { Section, Field, Input, Select, TextArea, Btn, Grid, inr, go, useApp, toInputDate } from './ui';
 import CandidateList from './CandidateList';
-import { SERVICE_TYPES, SOURCES, INDIAN_STATES, AGENT_CREATE, AGENT_MANAGE, COUNSELLOR_ROLES, SUPERVISED_ROLES, ROLE_INFO, normalizePhone, isPhone, isPincode } from './constants.js';
+import { SERVICE_TYPES, SOURCES, INDIAN_STATES, DEMAND_MANAGE, DEMAND_ASSIGNABLE, AGENT_CREATE, AGENT_MANAGE, COUNSELLOR_ROLES, SUPERVISED_ROLES, ROLE_INFO, normalizePhone, isPhone, isPincode } from './constants.js';
 
 // ================= Dashboard =================
 function StatCards({ s, money }) {
@@ -90,6 +90,10 @@ export function Dashboard() {
   useEffect(() => { api('/leads/stats').then(setS).catch((e) => notify(e.message, 'error')); }, [notify]);
   useEffect(() => { if (AGENT_CREATE.includes(user.role)) api('/agents/summary').then(setAg).catch(() => {}); }, [user.role]);
   const [store, setStore] = useState(null);
+  const [dem, setDem] = useState(null);
+  useEffect(() => {
+    if ([...DEMAND_MANAGE, ...DEMAND_ASSIGNABLE].includes(user.role)) api('/demands?status=Open').then(setDem).catch(() => {});
+  }, [user.role]);
   useEffect(() => { if (user.role === 'super_admin') api('/storage').then(setStore).catch(() => {}); }, [user.role]);
   const c = s?.counts || {};
   const cards = [
@@ -106,6 +110,11 @@ export function Dashboard() {
   );
   if (ag && AGENT_MANAGE.includes(user.role)) cards.push(['New B2B Agent Leads (unseen)', ag.unseen, Briefcase, 'text-rose-700', '/agents'], ['Total B2B Agents', ag.total, Briefcase, 'text-blue-900', '/agents']);
   else if (ag) cards.push(['My B2B Agent Leads', ag.total, Briefcase, 'text-blue-900', '/agents']);
+  if (dem) {
+    const manage = DEMAND_MANAGE.includes(user.role);
+    cards.push([manage ? 'Open Job Demands' : 'My Open Demands', dem.length, Briefcase, 'text-indigo-700', '/demands']);
+    cards.push([manage ? 'Selected (open demands)' : 'My Selected (open demands)', dem.reduce((s, d) => s + d.counts.selected, 0), CheckCircle2, 'text-emerald-700', '/demands']);
+  }
   return (
     <div className="space-y-6">
       <div>

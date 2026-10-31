@@ -1,5 +1,5 @@
 import mongoose from 'mongoose';
-import { ROLES, STATUSES, AGENT_STATUS } from './constants.js';
+import { ROLES, STATUSES, AGENT_STATUS, DEMAND_STATUS, INTERVIEW_STATUS, SELECTION_STATUS } from './constants.js';
 
 const { Schema } = mongoose;
 const str = { type: String, trim: true, default: '' };
@@ -188,6 +188,71 @@ agentSchema.pre('save', async function (next) {
   next();
 });
 export const Agent = mongoose.models.Agent || mongoose.model('Agent', agentSchema);
+
+// ---------- Job Demands (HR) ----------
+const commissionLine = { type: { type: String, enum: ['fixed', 'percent'], default: 'fixed' }, value: { type: Number, default: 0 } };
+const demandSchema = new Schema({
+  demandId: { type: String, unique: true },
+  country: { type: String, required: true, trim: true },
+  employerName: str,
+  recruitmentCompany: str,          // foreign recruitment company
+  agentName: str,
+  source: { type: String, trim: true, default: 'Direct Employer' },
+  contactPerson: str, employerEmail: { type: String, trim: true, lowercase: true, default: '' }, employerWhatsapp: str,
+  jobTitle: { type: String, required: true, trim: true },
+  vacancies: { type: Number, default: 0 },
+  salary: str, accommodation: str, food: str, workingHours: str, overtime: str,
+  experience: str, ageRequirement: str, qualification: str, contractDuration: str, requiredDocuments: str,
+  receivedDate: Date, closingDate: Date,
+  // money (HR / Director only)
+  rateFromEmployer: { type: Number, default: 0 },   // per candidate, ₹
+  rateAgreed: { type: Number, default: 0 },         // per candidate, ₹
+  paymentConditions: str,
+  expectedRevenue: { type: Number, default: 0 },
+  additionalCosts: { type: Number, default: 0 },
+  commission: {
+    counsellor: commissionLine, b2b: commissionLine, documentation: commissionLine, hr: commissionLine, other: commissionLine
+  },
+  status: { type: String, enum: DEMAND_STATUS, default: 'Open' },
+  notes: str,
+  assignments: [{
+    user: { type: Schema.Types.ObjectId, ref: 'User' }, userName: str, role: str,
+    rate: str,              // approved rate for this employee / B2B rate
+    target: { type: Number, default: 0 },
+    commission: { type: Number, default: 0 },
+    note: str, assignedAt: { type: Date, default: Date.now }
+  }],
+  files: [{ type: { type: String }, filename: str, contentType: str, size: Number, fileId: Schema.Types.ObjectId,
+    store: { type: String, default: 'main' }, uploadedByName: str, at: { type: Date, default: Date.now } }],
+  history: [{ note: str, by: { type: Schema.Types.ObjectId, ref: 'User' }, byName: str, at: { type: Date, default: Date.now } }],
+  createdBy: { type: Schema.Types.ObjectId, ref: 'User' },
+  createdByName: str
+}, { timestamps: true });
+demandSchema.index({ createdAt: -1 });
+demandSchema.index({ 'assignments.user': 1 });
+demandSchema.pre('save', async function (next) {
+  if (!this.demandId) { const n = await nextSeq('demand'); this.demandId = `DM-${n + 1000}`; }
+  next();
+});
+export const Demand = mongoose.models.Demand || mongoose.model('Demand', demandSchema);
+
+// One row = one candidate submitted against one demand (never twice)
+const submissionSchema = new Schema({
+  demand: { type: Schema.Types.ObjectId, ref: 'Demand', required: true, index: true },
+  lead: { type: Schema.Types.ObjectId, ref: 'Lead', required: true, index: true },
+  leadId: str, candidateName: str, phone: str,
+  submittedBy: { type: Schema.Types.ObjectId, ref: 'User', index: true }, submittedByName: str, submittedByRole: str,
+  agentName: str,               // when Bittu submits a B2B agent's candidate
+  interviewStatus: { type: String, enum: INTERVIEW_STATUS, default: 'Not Scheduled' },
+  interviewDate: Date,
+  selectionStatus: { type: String, enum: SELECTION_STATUS, default: 'Pending' },
+  sentToEmployer: { type: Boolean, default: false },   // Candidate file sent to employer by email: Yes / No
+  sentDate: Date, sentTo: str, sentAttachments: str,
+  employerResponse: str,
+  remarks: str
+}, { timestamps: true });
+submissionSchema.index({ demand: 1, lead: 1 }, { unique: true });
+export const Submission = mongoose.models.Submission || mongoose.model('Submission', submissionSchema);
 
 // ---------- Company settings (single document) ----------
 const settingsSchema = new Schema({

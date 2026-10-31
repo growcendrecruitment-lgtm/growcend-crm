@@ -54,6 +54,24 @@ export const REQUIRED_DOCS = ['Photo', 'Aadhaar Front', 'Aadhaar Back', 'PAN Car
 export const AGENT_TYPES = ['Indian Manpower Agency', 'Foreign Recruitment Company', 'Sub-Agent / Freelancer', 'Overseas Partner', 'Other'];
 export const AGENT_STATUS = ['New Lead', 'Contacted', 'Demand Shared', 'Rate Shared', 'Negotiation', 'Active Partner', 'Follow-up Later', 'Not Interested', 'Inactive'];
 
+// ---------- Job Demands (HR) ----------
+export const DEMAND_MANAGE = ['super_admin', 'hr'];        // create / edit / assign demands, see rates
+export const DEMAND_ASSIGNABLE = ['counsellor', 'b2b'];    // can receive a demand
+export const DEMAND_SOURCES = ['Direct Employer', 'B2B Agent', 'Foreign Recruitment Agency', 'Overseas Partner', 'Other'];
+export const DEMAND_STATUS = ['Open', 'On Hold', 'Closed', 'Completed'];
+export const DEMAND_FILE_TYPES = ['Job Vacancy Poster', 'Employer Demand Image', 'Job Description PDF', 'Candidate Requirement Details'];
+export const INTERVIEW_STATUS = ['Not Scheduled', 'Scheduled', 'Interview Done', 'No Show'];
+export const SELECTION_STATUS = ['Pending', 'Shortlisted', 'Selected', 'Rejected', 'On Hold', 'Withdrawn'];
+export const COMMISSION_KEYS = [
+  ['counsellor', 'Counsellor Commission'], ['b2b', 'B2B Counsellor Commission'], ['documentation', 'Documentation Commission'],
+  ['hr', 'HR Commission'], ['other', 'Other Approved Commission']
+];
+// value of one commission line per selected candidate (fixed ₹ or % of agreed rate)
+export const commissionValue = (c = {}, rate = 0) =>
+  (c.type === 'percent' ? (Number(c.value) || 0) * (Number(rate) || 0) / 100 : Number(c.value) || 0);
+export const commissionTotal = (commission = {}, rate = 0) =>
+  Math.round(COMMISSION_KEYS.reduce((s, [k]) => s + commissionValue(commission[k], rate), 0) * 100) / 100;
+
 export const PAY_MODES = ['Cash', 'UPI', 'Bank Transfer', 'Cheque', 'Card'];
 export const PAY_PURPOSES = [
   'Registration Fee', 'Advance Payment', 'Documentation Charges', 'Visa Processing Fee',

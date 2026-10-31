@@ -10,10 +10,12 @@ import dotenv from 'dotenv';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
-import { User, Lead, DocFile, Payment, Settings, Agent, getSettings, nextSeq } from './models.js';
+import { User, Lead, DocFile, Payment, Settings, Agent, Demand, Submission, getSettings, nextSeq } from './models.js';
 import {
   ROLES, STATUSES, DOC_TYPES, PAY_MODES, CAN_CREATE, CAN_EDIT, CAN_PAY, CAN_UPLOAD, CAN_VIEW_DOCS,
   CAN_SEE_FULL_IDS, CAN_ASSIGN_DOC, COUNSELLOR_ROLES, SUPERVISED_ROLES, AGENT_CREATE, AGENT_MANAGE, AGENT_STATUS,
+  DEMAND_MANAGE, DEMAND_ASSIGNABLE, DEMAND_SOURCES, DEMAND_STATUS, DEMAND_FILE_TYPES, INTERVIEW_STATUS, SELECTION_STATUS,
+  COMMISSION_KEYS, commissionTotal,
   normalizePhone, isPhone, isAnyPhone, isPincode, isAadhaar, isPAN, isPassport, isEmail, r2
 } from './constants.js';
 
@@ -36,7 +38,7 @@ app.use(helmet({
 app.use(compression()); // pages & data travel compressed = faster on mobile internet
 // Bigger body only for document uploads
 app.use((req, res, next) =>
-  express.json({ limit: req.method === 'POST' && req.path.endsWith('/documents') ? '9mb' : '1mb' })(req, res, next));
+  express.json({ limit: req.method === 'POST' && (req.path.endsWith('/documents') || req.path.endsWith('/files')) ? '9mb' : '1mb' })(req, res, next));
 app.use(cors({ origin: process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : (isProd ? false : true) }));
 
 // ---------- Helpers ----------
@@ -92,7 +94,7 @@ async function leadScope(user) {
   switch (user.role) {
     case 'super_admin': return {};
     case 'documentation': return { docAssignedTo: me };
-    case 'hr': return { $or: [{ createdBy: me }, { assignedTo: me }, { docAssignedTo: { $ne: null } }] };
+    case 'hr': return { $or: [{ createdBy: me }, { assignedTo: me }, { docAssignedTo: { $ne: null } }, { _id: { $in: await Submission.distinct('lead') } }] };
     case 'b2b': {
       const ids = await supervisedIds();
       return { $or: [{ createdBy: me }, { assignedTo: me }, { createdBy: { $in: ids } }, { assignedTo: { $in: ids } }] };
@@ -107,7 +109,7 @@ function canEditLead(user, lead) {
 }
 async function canViewLead(user, lead) {
   if (canEditLead(user, lead)) return true;
-  if (user.role === 'hr') return !!lead.docAssignedTo;
+  if (user.role === 'hr') return !!lead.docAssignedTo || !!(await Submission.exists({ lead: lead._id }));
   if (user.role === 'b2b') {
     const ids = await supervisedIds();
     return ids.some((id) => sameId(id, lead.createdBy) || sameId(id, lead.assignedTo));
@@ -611,6 +613,321 @@ app.get('/api/payments', auth, allow([...new Set(['super_admin', ...CAN_PAY])]),
     return res.send(toCSV([head, ...rows]));
   }
   res.json({ items, totals });
+}));
+
+// ---------- Job Demands (HR) ----------
+// HR & Director: create, edit, assign, see all money fields and all submissions.
+// Counsellor / Bittu: see ONLY demands assigned to them, only their own rate/target/commission, only their own submissions.
+const isDemandManager = (u) => DEMAND_MANAGE.includes(u.role);
+const DEMAND_FIELDS = ['country', 'employerName', 'recruitmentCompany', 'agentName', 'source', 'contactPerson', 'employerEmail',
+  'employerWhatsapp', 'jobTitle', 'vacancies', 'salary', 'accommodation', 'food', 'workingHours', 'overtime', 'experience',
+  'ageRequirement', 'qualification', 'contractDuration', 'requiredDocuments', 'receivedDate', 'closingDate', 'rateFromEmployer',
+  'rateAgreed', 'paymentConditions', 'expectedRevenue', 'additionalCosts', 'commission', 'status', 'notes'];
+const HIDDEN_FOR_STAFF = ['recruitmentCompany', 'agentName', 'contactPerson', 'employerEmail', 'employerWhatsapp', 'rateFromEmployer',
+  'rateAgreed', 'paymentConditions', 'expectedRevenue', 'additionalCosts', 'commission', 'history', 'createdBy'];
+
+function cleanDemandInput(body, isCreate) {
+  const d = {};
+  for (const k of DEMAND_FIELDS) if (body[k] !== undefined) d[k] = body[k];
+  for (const k of ['vacancies', 'rateFromEmployer', 'rateAgreed', 'expectedRevenue', 'additionalCosts'])
+    if (d[k] !== undefined) d[k] = d[k] === '' || d[k] === null ? 0 : Number(d[k]);
+  for (const k of ['receivedDate', 'closingDate']) if (d[k] === '') d[k] = null;
+  if (typeof d.employerWhatsapp === 'string') d.employerWhatsapp = normalizePhone(d.employerWhatsapp);
+  if (d.commission) {
+    const c = {};
+    for (const [k] of COMMISSION_KEYS) {
+      const x = d.commission[k] || {};
+      c[k] = { type: x.type === 'percent' ? 'percent' : 'fixed', value: Number(x.value) || 0 };
+    }
+    d.commission = c;
+  }
+  const e = [];
+  if (isCreate || d.country !== undefined) if (!String(d.country || '').trim()) e.push('Country is required');
+  if (isCreate || d.jobTitle !== undefined) if (!String(d.jobTitle || '').trim()) e.push('Job designation is required');
+  for (const k of ['vacancies', 'rateFromEmployer', 'rateAgreed', 'expectedRevenue', 'additionalCosts'])
+    if (d[k] !== undefined && (isNaN(d[k]) || d[k] < 0)) e.push(`${k} must be a positive number`);
+  if (d.source && !DEMAND_SOURCES.includes(d.source)) e.push('Invalid source');
+  if (d.status && !DEMAND_STATUS.includes(d.status)) e.push('Invalid status');
+  if (d.employerEmail && !isEmail(d.employerEmail)) e.push('Employer email is not valid');
+  if (d.employerWhatsapp && !isAnyPhone(d.employerWhatsapp)) e.push('Employer WhatsApp number is not valid');
+  if (d.commission) for (const [k, label] of COMMISSION_KEYS) {
+    const v = d.commission[k].value;
+    if (v < 0 || (d.commission[k].type === 'percent' && v > 100)) e.push(`${label} is not valid`);
+  }
+  return { data: d, error: e.join(' • ') };
+}
+
+function countSubs(subs, vacancies = 0) {
+  const live = subs.filter((x) => x.selectionStatus !== 'Withdrawn');
+  const c = {
+    submitted: live.length,
+    passports: live.filter((x) => x.lead?.passport?.number || x.passportNo).length,
+    interviews: live.filter((x) => ['Scheduled', 'Interview Done'].includes(x.interviewStatus)).length,
+    shortlisted: live.filter((x) => x.selectionStatus === 'Shortlisted').length,
+    selected: live.filter((x) => x.selectionStatus === 'Selected').length,
+    rejected: live.filter((x) => x.selectionStatus === 'Rejected').length,
+    sentToEmployer: live.filter((x) => x.sentToEmployer).length
+  };
+  c.pending = c.submitted - c.selected - c.rejected;
+  c.notSent = c.submitted - c.sentToEmployer;
+  c.remaining = Math.max(0, (vacancies || 0) - c.selected);
+  return c;
+}
+const myAssignment = (d, user) => (d.assignments || []).find((a) => sameId(a.user, user._id));
+
+function demandOut(d, user) {
+  const o = d.toObject ? d.toObject() : { ...d };
+  o.files = (o.files || []).map(({ fileId, ...f }) => f);
+  if (isDemandManager(user)) {
+    o.commissionTotal = commissionTotal(o.commission, o.rateAgreed);
+    o.expectedProfit = Math.round(((o.expectedRevenue || 0) - (o.additionalCosts || 0) - o.commissionTotal * (o.vacancies || 0)) * 100) / 100;
+    o._manage = true;
+    return o;
+  }
+  for (const k of HIDDEN_FOR_STAFF) delete o[k];
+  o.myAssignment = myAssignment(d, user) || null;
+  delete o.assignments;
+  return o;
+}
+async function loadDemand(req, res, id = req.params.id) {
+  if (!mongoose.isValidObjectId(id)) { res.status(404).json({ message: 'Demand not found' }); return null; }
+  const d = await Demand.findById(id);
+  if (!d) { res.status(404).json({ message: 'Demand not found' }); return null; }
+  if (!isDemandManager(req.user) && !myAssignment(d, req.user)) { res.status(403).json({ message: 'This demand is not assigned to you' }); return null; }
+  return d;
+}
+const subFilter = (req, demandId) => ({ demand: demandId, ...(isDemandManager(req.user) ? {} : { submittedBy: req.user._id }) });
+const pushDemandHistory = (d, req, note) => d.history.push({ note, by: req.user._id, byName: req.user.name });
+
+app.get('/api/demands', auth, allow([...DEMAND_MANAGE, ...DEMAND_ASSIGNABLE]), wrap(async (req, res) => {
+  const { q, status, country } = req.query;
+  const f = isDemandManager(req.user) ? {} : { 'assignments.user': req.user._id };
+  if (status) f.status = status;
+  if (country) f.country = new RegExp(`^${escapeRx(country)}$`, 'i');
+  if (q && String(q).trim()) {
+    const rx = new RegExp(escapeRx(String(q).trim()), 'i');
+    f.$or = [{ demandId: rx }, { country: rx }, { jobTitle: rx }, { employerName: rx }];
+  }
+  const items = await Demand.find(f).sort({ createdAt: -1 }).limit(500).select('-history -files.fileId');
+  const subs = await Submission.find({ demand: { $in: items.map((d) => d._id) }, ...(isDemandManager(req.user) ? {} : { submittedBy: req.user._id }) })
+    .select('demand interviewStatus selectionStatus sentToEmployer').lean();
+  res.json(items.map((d) => ({ ...demandOut(d, req.user), counts: countSubs(subs.filter((x) => sameId(x.demand, d._id)), d.vacancies) })));
+}));
+
+app.get('/api/demands/:id', auth, allow([...DEMAND_MANAGE, ...DEMAND_ASSIGNABLE]), wrap(async (req, res) => {
+  const d = await loadDemand(req, res);
+  if (!d) return;
+  const subs = await Submission.find(subFilter(req, d._id)).sort({ createdAt: -1 })
+    .populate('lead', 'leadId name phone passport.number qualification trade experienceYears status createdBy assignedTo').lean();
+  const out = demandOut(d, req.user);
+  out.counts = countSubs(subs, d.vacancies);
+  out.submissions = subs.map((x) => ({ ...x, passportNo: x.lead?.passport?.number || '' }));
+  res.json(out);
+}));
+
+app.post('/api/demands', auth, allow(DEMAND_MANAGE), wrap(async (req, res) => {
+  const { data, error } = cleanDemandInput(req.body || {}, true);
+  if (error) return res.status(400).json({ message: error });
+  const d = new Demand({ ...data, createdBy: req.user._id, createdByName: req.user.name });
+  pushDemandHistory(d, req, `Demand created by ${req.user.name}`);
+  await d.save();
+  res.status(201).json(demandOut(d, req.user));
+}));
+
+app.patch('/api/demands/:id', auth, allow(DEMAND_MANAGE), wrap(async (req, res) => {
+  const d = await loadDemand(req, res);
+  if (!d) return;
+  const { data, error } = cleanDemandInput(req.body || {}, false);
+  if (error) return res.status(400).json({ message: error });
+  if (data.status && data.status !== d.status) pushDemandHistory(d, req, `Status: ${d.status} → ${data.status}`);
+  d.set(data);
+  await d.save();
+  res.json(demandOut(d, req.user));
+}));
+
+// Assign to Counsellors / Bittu, each with own rate, target and commission
+app.put('/api/demands/:id/assignments', auth, allow(DEMAND_MANAGE), wrap(async (req, res) => {
+  const d = await loadDemand(req, res);
+  if (!d) return;
+  const list = Array.isArray(req.body?.assignments) ? req.body.assignments : [];
+  const out = [];
+  const seen = new Set();
+  for (const a of list) {
+    if (!mongoose.isValidObjectId(a.user) || seen.has(String(a.user))) continue;
+    const u = await User.findById(a.user).select('name role active');
+    if (!u || !u.active || !DEMAND_ASSIGNABLE.includes(u.role)) return res.status(400).json({ message: 'Demand can be assigned only to active Counsellors / B2B Counsellor' });
+    seen.add(String(a.user));
+    const old = myAssignment(d, u);
+    out.push({ user: u._id, userName: u.name, role: u.role, rate: String(a.rate || '').trim(), target: Math.max(0, Number(a.target) || 0),
+      commission: Math.max(0, Number(a.commission) || 0), note: String(a.note || '').trim(), assignedAt: old?.assignedAt || new Date() });
+  }
+  const before = new Set(d.assignments.map((a) => String(a.user)));
+  const added = out.filter((a) => !before.has(String(a.user))).map((a) => a.userName);
+  const removed = d.assignments.filter((a) => !seen.has(String(a.user))).map((a) => a.userName);
+  d.assignments = out;
+  if (added.length) pushDemandHistory(d, req, `Assigned to: ${added.join(', ')}`);
+  if (removed.length) pushDemandHistory(d, req, `Removed from: ${removed.join(', ')}`);
+  await d.save();
+  res.json(demandOut(d, req.user));
+}));
+
+// Poster / demand image / JD PDF
+app.post('/api/demands/:id/files', auth, allow(DEMAND_MANAGE), wrap(async (req, res) => {
+  const d = await loadDemand(req, res);
+  if (!d) return;
+  const { type, filename, contentType, data } = req.body || {};
+  if (!DEMAND_FILE_TYPES.includes(type)) return res.status(400).json({ message: 'Choose file type' });
+  if (!ALLOWED_TYPES.includes(contentType)) return res.status(400).json({ message: 'Only JPG, PNG, WEBP images or PDF allowed' });
+  const buf = Buffer.from(String(data || '').replace(/^data:[^,]+,/, ''), 'base64');
+  if (!buf.length) return res.status(400).json({ message: 'File missing' });
+  if (buf.length > 6 * 1024 * 1024) return res.status(400).json({ message: 'File too large (max 6 MB)' });
+  const safeName = String(filename || type).replace(/[^\w.\- ]/g, '_').slice(0, 80);
+  const fileId = await new Promise((resolve, reject) => {
+    const up = bucket.openUploadStream(`${d.demandId}-${safeName}`, { contentType, metadata: { demand: d._id, type } });
+    up.on('error', reject); up.on('finish', () => resolve(up.id)); up.end(buf);
+  });
+  d.files.push({ type, filename: safeName, contentType, size: buf.length, fileId, store: process.env.FILES_MONGODB_URI ? 'files' : 'main', uploadedByName: req.user.name });
+  pushDemandHistory(d, req, `File uploaded: ${type}`);
+  await d.save();
+  res.status(201).json(demandOut(d, req.user));
+}));
+
+app.get('/api/demands/:id/files/:fid', auth, allow([...DEMAND_MANAGE, ...DEMAND_ASSIGNABLE]), wrap(async (req, res) => {
+  const d = await loadDemand(req, res);
+  if (!d) return;
+  const f = d.files.id(req.params.fid);
+  if (!f) return res.status(404).json({ message: 'File not found' });
+  const stream = await findStream(f);
+  if (!stream) return res.status(404).json({ message: 'File not found in storage' });
+  res.setHeader('Content-Type', f.contentType);
+  res.setHeader('Cache-Control', 'private, max-age=3600');
+  res.setHeader('Content-Disposition', `inline; filename="${f.filename}"`);
+  stream.on('error', () => res.end()).pipe(res);
+}));
+
+app.delete('/api/demands/:id/files/:fid', auth, allow(['super_admin']), wrap(async (req, res) => {
+  const d = await loadDemand(req, res);
+  if (!d) return;
+  const f = d.files.id(req.params.fid);
+  if (!f) return res.status(404).json({ message: 'File not found' });
+  await deleteFile(f);
+  pushDemandHistory(d, req, `File deleted: ${f.type}`);
+  f.deleteOne();
+  await d.save();
+  res.json(demandOut(d, req.user));
+}));
+
+app.delete('/api/demands/:id', auth, allow(['super_admin']), wrap(async (req, res) => {
+  const d = await loadDemand(req, res);
+  if (!d) return;
+  if (await Submission.exists({ demand: d._id })) return res.status(400).json({ message: 'Candidates are submitted on this demand. Close it instead of deleting.' });
+  for (const f of d.files) await deleteFile(f);
+  await d.deleteOne();
+  res.json({ ok: true });
+}));
+
+// Submit a candidate on a demand (one candidate only once per demand)
+app.post('/api/demands/:id/submissions', auth, allow([...DEMAND_MANAGE, ...DEMAND_ASSIGNABLE]), wrap(async (req, res) => {
+  const d = await loadDemand(req, res);
+  if (!d) return;
+  if (['Closed', 'Completed'].includes(d.status)) return res.status(400).json({ message: `This demand is ${d.status}. New candidates cannot be submitted.` });
+  const lead = await loadLead(req, res, isDemandManager(req.user) ? 'view' : 'edit', req.body?.leadId);
+  if (!lead) return;
+  const dup = await Submission.findOne({ demand: d._id, lead: lead._id }).select('submittedByName');
+  if (dup) return res.status(409).json({ message: `${lead.name} (${lead.leadId}) is already submitted on this demand by ${dup.submittedByName}` });
+  let sub;
+  try {
+    sub = await Submission.create({
+      demand: d._id, lead: lead._id, leadId: lead.leadId, candidateName: lead.name, phone: lead.phone,
+      submittedBy: req.user._id, submittedByName: req.user.name, submittedByRole: req.user.role,
+      agentName: String(req.body?.agentName || '').trim(), remarks: String(req.body?.remarks || '').trim()
+    });
+  } catch (err) {
+    if (err.code === 11000) return res.status(409).json({ message: `${lead.name} is already submitted on this demand` });
+    throw err;
+  }
+  lead.followups.push({ note: `Submitted on demand ${d.demandId} — ${d.country} / ${d.jobTitle}`, system: true, by: req.user._id, byName: req.user.name });
+  if (!lead.country) lead.country = d.country;
+  if (!lead.job) lead.job = d.jobTitle;
+  await lead.save();
+  res.status(201).json(sub);
+}));
+
+// HR / Director update interview, selection, employer email. Submitter can only add remarks or withdraw.
+app.patch('/api/submissions/:sid', auth, allow([...DEMAND_MANAGE, ...DEMAND_ASSIGNABLE]), wrap(async (req, res) => {
+  if (!mongoose.isValidObjectId(req.params.sid)) return res.status(404).json({ message: 'Submission not found' });
+  const sub = await Submission.findById(req.params.sid);
+  if (!sub) return res.status(404).json({ message: 'Submission not found' });
+  const d = await loadDemand(req, res, sub.demand);
+  if (!d) return;
+  const b = req.body || {};
+  const manager = isDemandManager(req.user);
+  if (!manager && !sameId(sub.submittedBy, req.user._id)) return res.status(403).json({ message: 'You can change only your own submissions' });
+  const notes = [];
+  if (b.remarks !== undefined) sub.remarks = String(b.remarks).trim();
+  if (manager) {
+    if (b.interviewStatus !== undefined) {
+      if (!INTERVIEW_STATUS.includes(b.interviewStatus)) return res.status(400).json({ message: 'Invalid interview status' });
+      if (b.interviewStatus !== sub.interviewStatus) notes.push(`Interview: ${b.interviewStatus}`);
+      sub.interviewStatus = b.interviewStatus;
+    }
+    if (b.interviewDate !== undefined) sub.interviewDate = b.interviewDate || null;
+    if (b.employerResponse !== undefined) sub.employerResponse = String(b.employerResponse).trim();
+    if (b.sentToEmployer !== undefined) {
+      const sent = !!b.sentToEmployer;
+      if (sent && !sub.sentToEmployer) notes.push('CV sent to employer');
+      sub.sentToEmployer = sent;
+      if (sent && !sub.sentDate) sub.sentDate = b.sentDate || new Date();
+    }
+    if (b.sentDate !== undefined && b.sentDate) sub.sentDate = b.sentDate;
+    if (b.sentTo !== undefined) sub.sentTo = String(b.sentTo).trim();
+    if (b.sentAttachments !== undefined) sub.sentAttachments = String(b.sentAttachments).trim();
+  }
+  if (b.selectionStatus !== undefined && b.selectionStatus !== sub.selectionStatus) {
+    if (!SELECTION_STATUS.includes(b.selectionStatus)) return res.status(400).json({ message: 'Invalid selection status' });
+    if (!manager && !(b.selectionStatus === 'Withdrawn' && sub.selectionStatus === 'Pending'))
+      return res.status(403).json({ message: 'Only HR can change selection status (you can withdraw a pending candidate)' });
+    notes.push(`Selection: ${b.selectionStatus}`);
+    sub.selectionStatus = b.selectionStatus;
+  }
+  await sub.save();
+  if (notes.length) {
+    const lead = await Lead.findById(sub.lead);
+    if (lead) {
+      lead.followups.push({ note: `Demand ${d.demandId} (${d.country} / ${d.jobTitle}): ${notes.join(' · ')}`, system: true, by: req.user._id, byName: req.user.name });
+      if (sub.selectionStatus === 'Selected' && notes.some((n) => n.startsWith('Selection'))) {
+        if (STATUSES.indexOf(lead.status) < STATUSES.indexOf('Selected')) {
+          lead.followups.push({ note: `Status changed: ${lead.status} → Selected`, system: true, by: req.user._id, byName: req.user.name });
+          lead.status = 'Selected';
+        }
+        lead.employer = { ...(lead.employer?.toObject?.() || {}), name: lead.employer?.name || d.employerName, country: lead.employer?.country || d.country,
+          jobTitle: lead.employer?.jobTitle || d.jobTitle, salary: lead.employer?.salary || d.salary };
+      }
+      await lead.save();
+    }
+  }
+  res.json(sub);
+}));
+
+app.delete('/api/submissions/:sid', auth, allow(['super_admin']), wrap(async (req, res) => {
+  const sub = await Submission.findById(req.params.sid);
+  if (!sub) return res.status(404).json({ message: 'Submission not found' });
+  await sub.deleteOne();
+  res.json({ ok: true });
+}));
+
+app.get('/api/demands/:id/export.csv', auth, allow([...DEMAND_MANAGE, ...DEMAND_ASSIGNABLE]), wrap(async (req, res) => {
+  const d = await loadDemand(req, res);
+  if (!d) return;
+  const subs = await Submission.find(subFilter(req, d._id)).sort({ createdAt: 1 }).populate('lead', 'passport.number qualification trade experienceYears').lean();
+  const head = ['Demand ID', 'Country', 'Job', 'Employer', 'Candidate ID', 'Candidate', 'Mobile', 'Passport No', 'Qualification', 'Trade',
+    'Experience (Yrs)', 'Submitted By', 'Agent', 'Submission Date', 'Interview', 'Selection', 'CV Sent to Employer', 'Sent Date', 'Remarks'];
+  const rows = subs.map((x) => [d.demandId, d.country, d.jobTitle, d.employerName, x.leadId, x.candidateName, x.phone, x.lead?.passport?.number,
+    x.lead?.qualification, x.lead?.trade, x.lead?.experienceYears, x.submittedByName, x.agentName, fmtDate(x.createdAt), x.interviewStatus,
+    x.selectionStatus, x.sentToEmployer ? 'Yes' : 'No', fmtDate(x.sentDate), x.remarks]);
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="${`${d.demandId}-${d.country}-${d.jobTitle}`.replace(/[^\w.-]+/g, '_')}.csv"`);
+  res.send(toCSV([head, ...rows]));
 }));
 
 // ---------- B2B Agent Register (separate from candidates) ----------
