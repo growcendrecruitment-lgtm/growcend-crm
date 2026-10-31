@@ -1,10 +1,10 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Search, RefreshCw, PhoneCall, Plus, Download, MessageCircle } from 'lucide-react';
+import { Search, RefreshCw, PhoneCall, Plus, Download, MessageCircle, Eye } from 'lucide-react';
 import { api, downloadFile } from './api';
 import { Select, Btn, StatusBadge, Empty, fmtDate, inr, go, useApp, toInputDate } from './ui';
 import { STATUSES, SERVICE_TYPES, CAN_CREATE } from './constants.js';
 
-export default function CandidateList({ title, statusFilter, due, refreshKey = 0, compact }) {
+export default function CandidateList({ title, statusFilter, due, refreshKey = 0, compact, owner, inDoc, readOnly }) {
   const { user, notify, startCall } = useApp();
   const [items, setItems] = useState([]);
   const [search, setSearch] = useState('');
@@ -23,11 +23,13 @@ export default function CandidateList({ title, statusFilter, due, refreshKey = 0
     if (status || statusFilter) p.set('status', status || statusFilter);
     if (service) p.set('serviceType', service);
     if (due) p.set('due', due);
+    if (owner) p.set('owner', owner);
+    if (inDoc) p.set('inDoc', '1');
     setLoading(true);
     try { const d = await api(`/leads?${p}`); setItems(d.items); setMeta({ total: d.total, pages: d.pages }); }
     catch (e) { notify(e.message, 'error'); }
     finally { setLoading(false); }
-  }, [page, query, status, service, statusFilter, due, compact, notify]);
+  }, [page, query, status, service, statusFilter, due, compact, owner, inDoc, notify]);
 
   useEffect(() => { load(); }, [load, refreshKey]);
 
@@ -51,12 +53,12 @@ export default function CandidateList({ title, statusFilter, due, refreshKey = 0
         {!compact && <Select options={SERVICE_TYPES} placeholder="All Services" value={service} onChange={(e) => { setService(e.target.value); setPage(1); }} className="!w-auto" />}
         <span className="text-xs text-slate-500">{meta.total} records</span>
         <button onClick={load} title="Refresh" className="text-slate-500 hover:text-blue-900 p-1"><RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /></button>
-        {user.role === 'super_admin' && !compact && (
-          <Btn variant="light" onClick={() => downloadFile('/leads/export.csv', 'growcend-candidates.csv').catch((e) => notify(e.message, 'error'))}>
+        {!compact && (
+          <Btn variant="light" title="Download the records you are allowed to see" onClick={() => downloadFile(`/leads/export.csv${owner ? `?owner=${owner}` : ''}`, 'growcend-candidates.csv').catch((e) => notify(e.message, 'error'))}>
             <Download className="w-4 h-4" /> Excel
           </Btn>
         )}
-        {CAN_CREATE.includes(user.role) && !compact && <Btn onClick={() => go('/new')}><Plus className="w-4 h-4" /> New Candidate</Btn>}
+        {CAN_CREATE.includes(user.role) && !compact && !readOnly && <Btn onClick={() => go('/new')}><Plus className="w-4 h-4" /> New Candidate</Btn>}
       </div>
 
       <div className="overflow-x-auto">
@@ -76,14 +78,20 @@ export default function CandidateList({ title, statusFilter, due, refreshKey = 0
               return (
                 <tr key={l._id} className="border-t hover:bg-blue-50/40">
                   <td className="p-2 font-mono text-xs text-blue-900 cursor-pointer" onClick={() => go(`/candidate/${l._id}`)}>{l.leadId}</td>
-                  <td className="p-2 font-semibold cursor-pointer hover:underline" onClick={() => go(`/candidate/${l._id}`)}>{l.name}</td>
+                  <td className="p-2 cursor-pointer" onClick={() => go(`/candidate/${l._id}`)}>
+                    <span className="font-semibold hover:underline">{l.name}</span>
+                    {!l._canEdit && <span className="ml-1 text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-1 inline-flex items-center gap-0.5 align-middle"><Eye className="w-3 h-3" />view</span>}
+                    <div className="text-[11px] text-slate-400">{[l.assignedTo?.name && `Counsellor: ${l.assignedTo.name}`, l.docAssignedTo?.name && `Docs: ${l.docAssignedTo.name}`, !l.assignedTo && l.createdByName && `By: ${l.createdByName}`].filter(Boolean).join(' · ')}</div>
+                  </td>
                   <td className="p-2 whitespace-nowrap">{l.phone}</td>
                   <td className="p-2 text-xs">{[l.address?.city, l.address?.pincode].filter(Boolean).join(' – ') || <span className="text-rose-600">No pincode</span>}</td>
                   <td className="p-2 text-xs">{l.serviceType}<div className="text-slate-500">{[l.country, l.job].filter(Boolean).join(' · ')}</div></td>
                   <td className="p-2">
-                    <select value={l.status} onChange={(e) => changeStatus(l, e.target.value)} className="border rounded p-1 text-xs max-w-[150px]">
-                      {STATUSES.map((s) => <option key={s}>{s}</option>)}
-                    </select>
+                    {l._canEdit && !readOnly ? (
+                      <select value={l.status} onChange={(e) => changeStatus(l, e.target.value)} className="border rounded p-1 text-xs max-w-[150px]">
+                        {STATUSES.map((s) => <option key={s}>{s}</option>)}
+                      </select>
+                    ) : <StatusBadge status={l.status} />}
                   </td>
                   <td className={`p-2 text-xs whitespace-nowrap ${fu && fu < today ? 'text-rose-600 font-semibold' : fu === today ? 'text-amber-700 font-semibold' : ''}`}>{fu ? fmtDate(l.nextFollowUp) : '—'}</td>
                   <td className={`p-2 text-xs whitespace-nowrap ${dueAmt > 0 ? 'text-rose-700' : 'text-slate-400'}`}>{dueAmt > 0 ? inr(dueAmt) : '—'}</td>

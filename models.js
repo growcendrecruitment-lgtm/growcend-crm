@@ -1,5 +1,5 @@
 import mongoose from 'mongoose';
-import { ROLES, STATUSES } from './constants.js';
+import { ROLES, STATUSES, AGENT_STATUS } from './constants.js';
 
 const { Schema } = mongoose;
 const str = { type: String, trim: true, default: '' };
@@ -84,6 +84,7 @@ const leadSchema = new Schema({
   source: { type: String, trim: true, default: 'Telecalling' },
   referredBy: str,
   assignedTo: { type: Schema.Types.ObjectId, ref: 'User' },
+  docAssignedTo: { type: Schema.Types.ObjectId, ref: 'User', default: null }, // Documentation staff handling the file
   status: { type: String, enum: STATUSES, default: 'New Lead' },
   nextFollowUp: Date,
   notes: str,
@@ -100,6 +101,9 @@ const leadSchema = new Schema({
 leadSchema.index({ createdAt: -1 });
 leadSchema.index({ status: 1, createdAt: -1 });
 leadSchema.index({ phone: 1 });
+leadSchema.index({ createdBy: 1 });
+leadSchema.index({ assignedTo: 1 });
+leadSchema.index({ docAssignedTo: 1 });
 leadSchema.index({ nextFollowUp: 1 });
 leadSchema.index({ 'address.pincode': 1 });
 
@@ -117,6 +121,7 @@ const docSchema = new Schema({
   contentType: str,
   size: Number,
   fileId: Schema.Types.ObjectId,
+  store: { type: String, default: 'main' }, // 'main' DB or separate 'files' DB
   uploadedBy: { type: Schema.Types.ObjectId, ref: 'User' },
   uploadedByName: str
 }, { timestamps: true });
@@ -145,13 +150,53 @@ const paymentSchema = new Schema({
 paymentSchema.index({ date: -1 });
 export const Payment = mongoose.models.Payment || mongoose.model('Payment', paymentSchema);
 
+// ---------- B2B Agents (separate register — never mixed with candidates) ----------
+const agentNoteSchema = new Schema({
+  note: str, system: { type: Boolean, default: false },
+  by: { type: Schema.Types.ObjectId, ref: 'User' }, byName: str, at: { type: Date, default: Date.now }
+});
+const agentSchema = new Schema({
+  agentId: { type: String, unique: true },
+  agentName: { type: String, required: true, trim: true },
+  companyName: str,
+  contactPerson: str,
+  phone: { type: String, required: true, trim: true },
+  whatsapp: str,
+  email: { type: String, trim: true, lowercase: true, default: '' },
+  country: { type: String, trim: true, default: 'India' },
+  city: str,
+  address: str,
+  agentType: str,
+  manpower: str,          // available manpower
+  jobCategories: str,     // interested job categories
+  expectedRate: str,
+  notes: str,             // telecaller notes
+  followUpDate: Date,
+  status: { type: String, enum: AGENT_STATUS, default: 'New Lead' },
+  active: { type: Boolean, default: true },
+  assignedTo: { type: Schema.Types.ObjectId, ref: 'User' }, // auto = Bittu (B2B Counsellor)
+  seenByB2B: { type: Boolean, default: false },              // notification for Bittu
+  history: [agentNoteSchema],
+  createdBy: { type: Schema.Types.ObjectId, ref: 'User' },
+  createdByName: str
+}, { timestamps: true });
+agentSchema.index({ createdAt: -1 });
+agentSchema.index({ phone: 1 });
+agentSchema.index({ createdBy: 1 });
+agentSchema.pre('save', async function (next) {
+  if (!this.agentId) { const n = await nextSeq('agent'); this.agentId = `AG-${n + 1000}`; }
+  next();
+});
+export const Agent = mongoose.models.Agent || mongoose.model('Agent', agentSchema);
+
 // ---------- Company settings (single document) ----------
 const settingsSchema = new Schema({
   _id: { type: String, default: 'main' },
   company: {
     name: { type: String, default: 'GROWCEND INDIA PRIVATE LIMITED' },
     address: str, city: str, state: str, pincode: str,
-    phone: str, email: str, website: str, gstin: str, pan: str, cin: str, raLicense: str
+    phone: str, email: str, website: str, gstin: str, pan: str, cin: str, raLicense: str,
+    logo: { type: String, default: '' } // small image as data URL, printed on bills
   },
   bank: { name: str, account: str, ifsc: str, branch: str, upi: str },
   invoice: {

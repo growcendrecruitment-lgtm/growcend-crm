@@ -4,7 +4,7 @@ import { api } from './api';
 import { Field, Input, Select, TextArea, Section, Grid, Btn, getPath, setPath, toInputDate, useApp, go } from './ui';
 import {
   GENDERS, MARITAL, INDIAN_STATES, ECR, QUALIFICATIONS, ENGLISH, SERVICE_TYPES, SOURCES, STATUSES, VISA_STATUS,
-  MEDICAL_STATUS, PCC_STATUS, CAN_PAY, normalizePhone, isPhone, isPincode, isAadhaar, isPAN, isPassport, isEmail
+  MEDICAL_STATUS, PCC_STATUS, CAN_PAY, CAN_ASSIGN_DOC, COUNSELLOR_ROLES, normalizePhone, isPhone, isPincode, isAadhaar, isPAN, isPassport, isEmail
 } from './constants.js';
 
 const married = (v) => v.maritalStatus && v.maritalStatus !== 'Single';
@@ -56,7 +56,8 @@ export const PROFILE_SECTIONS = [
     { k: 'expectedSalary', label: 'Expected Salary' },
     { k: 'source', label: 'Lead Source', type: 'select', options: SOURCES },
     { k: 'referredBy', label: 'Referred By / Agent Name' },
-    { k: 'assignedTo', label: 'Assigned Counsellor', type: 'user' },
+    { k: 'assignedTo', label: 'Assigned Counsellor', type: 'user', hint: 'Telecaller: choose counsellor to transfer the lead' },
+    { k: 'docAssignedTo', label: 'Documentation Staff (file handover)', type: 'docuser', hint: 'Choose when candidate is selected — file goes to Documentation' },
     { k: 'status', label: 'Status', type: 'select', options: STATUSES },
     { k: 'packageAmount', label: 'Total Package / Fee (₹)', type: 'number', payOnly: true },
     { k: 'nextFollowUp', label: 'Next Follow-up Date', type: 'date' },
@@ -103,7 +104,7 @@ function toFormValues(lead, sections) {
   for (const f of allFields(sections)) {
     const cur = getPath(v, f.k);
     if (f.type === 'date') v = setPath(v, f.k, toInputDate(cur));
-    else if (f.type === 'user') v = setPath(v, f.k, cur?._id || cur || '');
+    else if (f.type === 'user' || f.type === 'docuser') v = setPath(v, f.k, cur?._id || cur || '');
     else if (cur == null) v = setPath(v, f.k, '');
   }
   return v;
@@ -128,7 +129,7 @@ export function validate(v, sections) {
   return e;
 }
 
-export default function CandidateForm({ initial = {}, mode = 'create', group = 'profile', onSaved }) {
+export default function CandidateForm({ initial = {}, mode = 'create', group = 'profile', onSaved, readOnly = false }) {
   const { user, notify } = useApp();
   const sections = group === 'process' ? PROCESS_SECTIONS : PROFILE_SECTIONS;
   const defaults = mode === 'create' ? { nationality: 'Indian', serviceType: 'Overseas Job Placement', source: 'Telecalling', status: 'New Lead' } : {};
@@ -139,8 +140,13 @@ export default function CandidateForm({ initial = {}, mode = 'create', group = '
   const [dup, setDup] = useState(null);
 
   useEffect(() => { api('/users/basic').then(setUsers).catch(() => {}); }, []);
-  const userOptions = useMemo(() => users.map((u) => ({ value: u.id, label: `${u.name}` })), [users]);
+  const curAssigned = initial.assignedTo?._id || initial.assignedTo || '';
+  const userOptions = useMemo(() => users
+    .filter((u) => COUNSELLOR_ROLES.includes(u.role) || user.role === 'super_admin' || u.id === curAssigned || u.id === user.id)
+    .map((u) => ({ value: u.id, label: `${u.name}${u.role === 'b2b' ? ' (B2B)' : ''}` })), [users, user, curAssigned]);
+  const docOptions = useMemo(() => users.filter((u) => u.role === 'documentation').map((u) => ({ value: u.id, label: u.name })), [users]);
   const canPay = CAN_PAY.includes(user.role);
+  const canAssignDoc = CAN_ASSIGN_DOC.includes(user.role);
 
   const change = (f) => (e) => {
     let val = e.target.value;
@@ -173,7 +179,7 @@ export default function CandidateForm({ initial = {}, mode = 'create', group = '
         onSaved && onSaved(lead);
       }
     } catch (err) {
-      if (err.status === 409 && err.data?.existingId) setDup(err.data);
+      if (err.status === 409) setDup(err.data);
       notify(err.message, 'error');
     } finally { setSaving(false); }
   };
@@ -185,6 +191,11 @@ export default function CandidateForm({ initial = {}, mode = 'create', group = '
     let input;
     if (f.type === 'select') input = <Select options={f.options} {...common} />;
     else if (f.type === 'user') input = <Select options={userOptions} placeholder="— Not assigned —" {...common} />;
+    else if (f.type === 'docuser') {
+      const cur = initial.docAssignedTo;
+      const opts = docOptions.length || !cur ? docOptions : [{ value: cur._id || cur, label: cur.name || 'Assigned' }];
+      input = <Select options={opts} placeholder="— Not handed over —" {...common} disabled={!canAssignDoc} />;
+    }
     else if (f.type === 'textarea') input = <TextArea {...common} />;
     else if (f.type === 'date') input = <Input type="date" {...common} />;
     else if (f.type === 'number') input = <Input type="number" min="0" step="any" inputMode="decimal" {...common} disabled={f.payOnly && !canPay} />;
@@ -202,19 +213,21 @@ export default function CandidateForm({ initial = {}, mode = 'create', group = '
 
   return (
     <form onSubmit={submit} className="space-y-4" noValidate>
+      <fieldset disabled={readOnly} className="space-y-4 min-w-0">
       {dup && (
         <div className="bg-amber-50 border border-amber-300 text-amber-900 text-sm rounded-lg p-3 flex justify-between items-center gap-2">
           <span>{dup.message}</span>
-          <Btn type="button" variant="light" onClick={() => go(`/candidate/${dup.existingId}`)}>Open existing</Btn>
+          {dup.existingId && <Btn type="button" variant="light" onClick={() => go(`/candidate/${dup.existingId}`)}>Open existing</Btn>}
         </div>
       )}
       {sections.map((s) => (
         <Section key={s.title} title={s.title}><Grid>{s.fields.map(renderField)}</Grid></Section>
       ))}
-      <div className="sticky bottom-0 bg-slate-100/95 py-3 flex justify-end gap-2 border-t">
+      </fieldset>
+      {!readOnly && <div className="sticky bottom-0 bg-slate-100/95 py-3 flex justify-end gap-2 border-t">
         {mode === 'create' && <Btn type="button" variant="light" onClick={() => window.history.back()}>Cancel</Btn>}
         <Btn type="submit" disabled={saving}><Save className="w-4 h-4" /> {saving ? 'Saving…' : mode === 'create' ? 'Save Candidate' : 'Save Changes'}</Btn>
-      </div>
+      </div>}
     </form>
   );
 }

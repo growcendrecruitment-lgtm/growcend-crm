@@ -10,7 +10,7 @@ body {
 
 @media print {
   @page { size: A4; margin: 10mm; }
-  body { background: #fff !important; }
+  body, .app-root { background: #fff !important; min-height: 0 !important; }
   header, aside, .no-print { display: none !important; }
   main { padding: 0 !important; }
   .invoice { box-shadow: none !important; border: none !important; max-width: 100% !important; padding: 0 !important; }

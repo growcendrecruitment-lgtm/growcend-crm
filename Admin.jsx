@@ -1,31 +1,49 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Download, Printer, Save, UserPlus } from 'lucide-react';
+import { Download, Printer, Save, UserPlus, Search, FilePlus2 } from 'lucide-react';
 import { api, downloadFile } from './api';
-import { Section, Field, Input, Select, TextArea, Btn, Grid, Empty, fmtDate, inr, go, useApp, todayInput } from './ui';
+import { Section, Field, Input, Select, TextArea, Btn, Grid, Empty, Modal, fmtDate, inr, go, useApp, todayInput } from './ui';
 import { ROLE_INFO, INDIAN_STATES } from './constants.js';
 
 // ================= Accounts / Ledger =================
 export function Accounts() {
-  const { notify } = useApp();
+  const { user, notify } = useApp();
+  const isAdmin = user.role === 'super_admin';
   const first = todayInput().slice(0, 8) + '01';
   const [from, setFrom] = useState(first);
   const [to, setTo] = useState(todayInput());
+  const [search, setSearch] = useState('');
+  const [q, setQ] = useState('');
   const [d, setD] = useState(null);
+  const [picker, setPicker] = useState(false);
+  useEffect(() => { const t = setTimeout(() => setQ(search), 400); return () => clearTimeout(t); }, [search]);
   const load = useCallback(() => {
-    api(`/payments?from=${from}&to=${to}`).then(setD).catch((e) => notify(e.message, 'error'));
-  }, [from, to, notify]);
+    const p = new URLSearchParams({ from, to });
+    if (q) p.set('q', q);
+    api(`/payments?${p}`).then(setD).catch((e) => notify(e.message, 'error'));
+  }, [from, to, q, notify]);
   useEffect(() => { load(); }, [load]);
   const t = d?.totals || {};
   return (
     <div className="space-y-4">
-      <h2 className="text-xl font-bold">Accounts & Tax Invoices</h2>
+      <div className="flex flex-wrap justify-between items-center gap-2">
+        <h2 className="text-xl font-bold">Bills & Payments</h2>
+        <Btn variant="green" onClick={() => setPicker(true)}><FilePlus2 className="w-4 h-4" /> Make New Bill</Btn>
+      </div>
+      <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-xs text-blue-900">
+        <b>Bill kaise banta hai:</b> “Make New Bill” → candidate chuno → <b>Receive Payment</b> form bharo (amount, mode, UTR, purpose) → <b>Save Payment &amp; Generate Bill</b>. Bill number apne-aap lagta hai. Phir <b>Bill</b> button → <b>Print / Save as PDF</b>.
+        {!isAdmin && <span className="block mt-1 text-blue-700">You see bills of your own candidates only.</span>}
+      </div>
       <div className="bg-white border rounded-xl p-3 flex flex-wrap gap-3 items-end">
         <Field label="From"><Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} /></Field>
         <Field label="To"><Input type="date" value={to} onChange={(e) => setTo(e.target.value)} /></Field>
-        <Btn variant="light" onClick={() => downloadFile(`/payments?from=${from}&to=${to}&format=csv`, `payments-${from}-to-${to}.csv`).catch((e) => notify(e.message, 'error'))}>
-          <Download className="w-4 h-4" /> Excel (for CA / GST)
-        </Btn>
+        <Field label="Search bill" className="flex-1 min-w-[180px]"><Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Bill no. / name / mobile / GC-ID" /></Field>
+        {isAdmin && (
+          <Btn variant="light" onClick={() => downloadFile(`/payments?from=${from}&to=${to}&format=csv`, `payments-${from}-to-${to}.csv`).catch((e) => notify(e.message, 'error'))}>
+            <Download className="w-4 h-4" /> Excel (for CA / GST)
+          </Btn>
+        )}
       </div>
+      {picker && <PickCandidate onClose={() => setPicker(false)} />}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         {[['Bills', t.count || 0], ['Total Received', inr(t.amount)], ['Taxable Value', inr(t.taxable)], ['GST Collected', inr(t.gst)]].map(([k, v]) => (
           <div key={k} className="bg-white border rounded-xl p-4"><p className="text-xs text-slate-500">{k}</p><p className="text-xl font-black text-blue-900">{v}</p></div>
@@ -47,13 +65,49 @@ export function Accounts() {
                 <td className="p-2 text-xs">{p.mode}</td>
                 <td className="p-2 text-xs text-right">{inr((p.gst?.cgst || 0) + (p.gst?.sgst || 0) + (p.gst?.igst || 0))}</td>
                 <td className="p-2 text-right font-semibold">{inr(p.amount)}</td>
-                <td className="p-2"><Btn variant="light" onClick={() => go(`/invoice/${p._id}`)}><Printer className="w-3.5 h-3.5" /></Btn></td>
+                <td className="p-2"><Btn variant="light" onClick={() => go(`/invoice/${p._id}`)}><Printer className="w-3.5 h-3.5" /> Bill</Btn></td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
     </div>
+  );
+}
+
+// Choose a candidate → opens their Payments & Bills tab
+function PickCandidate({ onClose }) {
+  const { notify } = useApp();
+  const [q, setQ] = useState('');
+  const [items, setItems] = useState([]);
+  useEffect(() => {
+    const t = setTimeout(() => {
+      const p = new URLSearchParams({ limit: 15 });
+      if (q.trim()) p.set('q', q.trim());
+      api(`/leads?${p}`).then((r) => setItems(r.items)).catch((e) => notify(e.message, 'error'));
+    }, 300);
+    return () => clearTimeout(t);
+  }, [q, notify]);
+  return (
+    <Modal title="Make New Bill — choose candidate" onClose={onClose}>
+      <div className="flex items-center gap-1 border rounded-md px-2 mb-3">
+        <Search className="w-4 h-4 text-slate-400" />
+        <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Name / mobile / GC-ID" className="flex-1 text-sm p-2 focus:outline-none" />
+      </div>
+      {items.length === 0 ? <Empty>No candidate found</Empty> : (
+        <ul className="divide-y border rounded">
+          {items.map((l) => (
+            <li key={l._id}>
+              <button disabled={!l._canEdit} onClick={() => go(`/candidate/${l._id}/payments`)}
+                className="w-full text-left p-2 hover:bg-blue-50 disabled:opacity-50 disabled:hover:bg-transparent flex justify-between gap-2">
+                <span><b>{l.name}</b> <span className="text-xs text-slate-500">{l.leadId} · {l.phone}</span></span>
+                <span className="text-xs text-slate-500">{l._canEdit ? `Due ${inr(Math.max(0, (l.packageAmount || 0) - (l.paidAmount || 0)))}` : 'view only'}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Modal>
   );
 }
 
@@ -74,6 +128,28 @@ export function Settings() {
     catch (err) { notify(err.message, 'error'); } finally { setSaving(false); }
   };
   const C = s.company; const B = s.bank; const I = s.invoice;
+  const pickLogo = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) return notify('Choose a PNG or JPG image', 'error');
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, 300 / Math.max(img.width, img.height));
+      const cv = document.createElement('canvas');
+      cv.width = Math.round(img.width * scale); cv.height = Math.round(img.height * scale);
+      const ctx = cv.getContext('2d');
+      ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cv.width, cv.height);
+      ctx.drawImage(img, 0, 0, cv.width, cv.height);
+      let data = cv.toDataURL('image/png');
+      if (data.length > 350000) data = cv.toDataURL('image/jpeg', 0.85);
+      URL.revokeObjectURL(url);
+      setS((p) => ({ ...p, company: { ...p.company, logo: data } }));
+      notify('Logo ready — click Save Settings');
+    };
+    img.onerror = () => notify('This image could not be read', 'error');
+    img.src = url;
+  };
   return (
     <form onSubmit={save} className="space-y-4">
       <h2 className="text-xl font-bold">Company Settings <span className="text-xs font-normal text-slate-500">(printed on every bill)</span></h2>
@@ -91,6 +167,14 @@ export function Settings() {
           <Field label="Company PAN"><Input value={C.pan} onChange={set('company', 'pan')} className="uppercase" /></Field>
           <Field label="CIN"><Input value={C.cin} onChange={set('company', 'cin')} /></Field>
           <Field label="MEA Recruiting Agent (RA) Licence No."><Input value={C.raLicense} onChange={set('company', 'raLicense')} /></Field>
+          <div className="sm:col-span-2 lg:col-span-3 flex items-center gap-3 border rounded-lg p-3">
+            {C.logo ? <img src={C.logo} alt="logo" className="h-14 w-14 object-contain border rounded" /> : <div className="h-14 w-14 border rounded flex items-center justify-center text-[10px] text-slate-400">No logo</div>}
+            <div className="text-xs space-y-1">
+              <p className="font-semibold text-slate-600">Company Logo (printed on bill)</p>
+              <input type="file" accept="image/png,image/jpeg,image/webp" onChange={pickLogo} className="text-xs" />
+              {C.logo && <button type="button" className="text-rose-700 underline" onClick={() => setS((p) => ({ ...p, company: { ...p.company, logo: '' } }))}>Remove logo</button>}
+            </div>
+          </div>
         </Grid>
       </Section>
       <Section title="Bank Details (shown on bill)">

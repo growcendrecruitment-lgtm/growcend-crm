@@ -4,7 +4,7 @@ import { api, apiBlob } from './api';
 import { Section, Field, Select, Btn, Modal, Empty, fmtDateTime, useApp } from './ui';
 import { DOC_TYPES, REQUIRED_DOCS, CAN_UPLOAD, CAN_VIEW_DOCS } from './constants.js';
 
-// Photos from phone camera are big — shrink to max 1800px JPEG (~200-400 KB) before upload
+// Photos from phone camera are big — shrink to max 1400px JPEG (~120-200 KB) before upload. Text on Aadhaar/PAN/Passport stays readable.
 async function prepareFile(file) {
   if (file.type === 'application/pdf') {
     if (file.size > 5 * 1024 * 1024) throw new Error('PDF is larger than 5 MB. Please compress it first.');
@@ -15,14 +15,14 @@ async function prepareFile(file) {
   const url = URL.createObjectURL(file);
   try {
     const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('This image format is not supported. Use JPG or PNG.')); i.src = url; });
-    const max = 1800;
+    const max = 1400;
     const scale = Math.min(1, max / Math.max(img.width, img.height));
     const c = document.createElement('canvas');
     c.width = Math.round(img.width * scale); c.height = Math.round(img.height * scale);
     const ctx = c.getContext('2d');
     ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
     ctx.drawImage(img, 0, 0, c.width, c.height);
-    return { data: c.toDataURL('image/jpeg', 0.8), contentType: 'image/jpeg', filename: file.name.replace(/\.[^.]+$/, '') + '.jpg' };
+    return { data: c.toDataURL('image/jpeg', 0.72), contentType: 'image/jpeg', filename: file.name.replace(/\.[^.]+$/, '') + '.jpg' };
   } finally { URL.revokeObjectURL(url); }
 }
 
@@ -32,7 +32,8 @@ export default function Documents({ lead, docs, reload }) {
   const [file, setFile] = useState(null);
   const [busy, setBusy] = useState(false);
   const [viewer, setViewer] = useState(null);
-  const canUpload = CAN_UPLOAD.includes(user.role);
+  const canUpload = CAN_UPLOAD.includes(user.role) && lead._canEdit;
+  const canDelete = user.role === 'super_admin';
   const canView = CAN_VIEW_DOCS.includes(user.role);
   const count = (t) => docs.filter((d) => d.type === t).length;
 
@@ -75,7 +76,7 @@ export default function Documents({ lead, docs, reload }) {
               <Btn type="submit" disabled={busy} className="w-full"><Upload className="w-4 h-4" /> {busy ? 'Uploading…' : 'Upload'}</Btn>
             </form>
           </Section>
-        ) : <div className="text-xs text-slate-500 bg-white border rounded-xl p-4">Your role cannot upload documents.</div>}
+        ) : <div className="text-xs text-slate-500 bg-white border rounded-xl p-4">{lead._canEdit ? 'Your role cannot upload documents.' : 'View only — you cannot upload documents for this candidate.'}</div>}
 
         <Section title="Checklist">
           <ul className="space-y-1 text-sm">
@@ -105,7 +106,7 @@ export default function Documents({ lead, docs, reload }) {
                       {canView && (
                         <div className="flex gap-1 justify-end">
                           <Btn variant="light" onClick={() => view(d)}><Eye className="w-3.5 h-3.5" /> View</Btn>
-                          <Btn variant="light" onClick={() => remove(d)}><Trash2 className="w-3.5 h-3.5 text-rose-600" /></Btn>
+                          {canDelete && <Btn variant="light" onClick={() => remove(d)} title="Delete (Director only)"><Trash2 className="w-3.5 h-3.5 text-rose-600" /></Btn>}
                         </div>
                       )}
                     </td>

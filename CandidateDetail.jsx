@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { ArrowLeft, PhoneCall, MessageCircle, AlertTriangle, Trash2 } from 'lucide-react';
+import { ArrowLeft, PhoneCall, MessageCircle, AlertTriangle, Trash2, Eye } from 'lucide-react';
 import { api } from './api';
 import { Section, Field, Select, TextArea, Input, Btn, StatusBadge, Empty, fmtDate, fmtDateTime, inr, go, useApp, toInputDate } from './ui';
 import CandidateForm from './CandidateForm';
@@ -60,7 +60,9 @@ export default function CandidateDetail({ id, tab = 'profile' }) {
             {lead.passport?.number && <> · 🛂 {lead.passport.number}</>}
           </p>
           <p className="text-xs text-slate-500 mt-0.5">{lead.serviceType}{lead.country && ` → ${lead.country}`}{lead.job && ` · ${lead.job}`}
-            {lead.assignedTo?.name && ` · Counsellor: ${lead.assignedTo.name}`}</p>
+            {lead.assignedTo?.name && ` · Counsellor: ${lead.assignedTo.name}`}
+            {lead.docAssignedTo?.name && ` · Documentation: ${lead.docAssignedTo.name}`}
+            {lead.createdByName && ` · Entered by: ${lead.createdByName}`}</p>
         </div>
         <div className="flex items-start gap-4">
           <div className="text-right text-xs">
@@ -75,6 +77,12 @@ export default function CandidateDetail({ id, tab = 'profile' }) {
           </div>
         </div>
       </div>
+
+      {!lead._canEdit && (
+        <div className="bg-sky-50 border border-sky-300 rounded-lg p-3 text-xs text-sky-900 flex items-center gap-2">
+          <Eye className="w-4 h-4" /> <b>VIEW ONLY</b> — this candidate belongs to another employee. You can see details but cannot change anything.
+        </div>
+      )}
 
       {alerts.length > 0 && (
         <div className="bg-amber-50 border border-amber-300 rounded-lg p-3 text-xs text-amber-900 space-y-1">
@@ -91,8 +99,8 @@ export default function CandidateDetail({ id, tab = 'profile' }) {
         ))}
       </div>
 
-      {tab === 'profile' && <CandidateForm key={`p-${lead.updatedAt}`} mode="edit" group="profile" initial={lead} onSaved={setLead} />}
-      {tab === 'process' && <CandidateForm key={`v-${lead.updatedAt}`} mode="edit" group="process" initial={lead} onSaved={setLead} />}
+      {tab === 'profile' && <CandidateForm key={`p-${lead.updatedAt}`} mode="edit" group="profile" initial={lead} onSaved={setLead} readOnly={!lead._canEdit} />}
+      {tab === 'process' && <CandidateForm key={`v-${lead.updatedAt}`} mode="edit" group="process" initial={lead} onSaved={setLead} readOnly={!lead._canEdit} />}
       {tab === 'followups' && <Followups lead={lead} onSaved={setLead} />}
       {tab === 'documents' && <Documents lead={lead} docs={docs} reload={load} />}
       {tab === 'payments' && <Payments lead={lead} reload={load} />}
@@ -115,6 +123,7 @@ function Followups({ lead, onSaved }) {
   const list = [...(lead.followups || [])].reverse();
   return (
     <div className="grid lg:grid-cols-3 gap-4">
+      {!lead._canEdit ? <div className="text-xs text-slate-500 bg-white border rounded-xl p-4 h-fit">View only — you cannot add follow-ups for this candidate.</div> : (
       <Section title="Add Call / Follow-up">
         <form onSubmit={submit} className="space-y-3">
           <Field label="Call Outcome"><Select options={CALL_OUTCOMES} value={f.outcome} onChange={set('outcome')} /></Field>
@@ -123,7 +132,7 @@ function Followups({ lead, onSaved }) {
           <Field label="Update Status"><Select options={STATUSES} value={f.status} onChange={set('status')} /></Field>
           <Btn type="submit" disabled={saving} className="w-full">{saving ? 'Saving…' : 'Save Follow-up'}</Btn>
         </form>
-      </Section>
+      </Section>)}
       <div className="lg:col-span-2">
         <Section title={`History (${list.length})`}>
           {list.length === 0 && <Empty>No history yet</Empty>}

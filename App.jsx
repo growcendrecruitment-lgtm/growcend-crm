@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Building2, Users as UsersIcon, PhoneCall, FileText, IndianRupee, Globe, Plane, Briefcase, LogOut,
-  UserPlus, CalendarClock, Settings as SettingsIcon, Menu, X, KeyRound
+  UserPlus, CalendarClock, Settings as SettingsIcon, Menu, X, KeyRound, Eye
 } from 'lucide-react';
 import { api, getToken, setToken } from './api';
 import { AppCtx, go } from './ui';
@@ -10,19 +10,21 @@ import CandidateList from './CandidateList';
 import CandidateForm from './CandidateForm';
 import CandidateDetail from './CandidateDetail';
 import Invoice from './Invoice';
-import { Dashboard, Telecalling } from './Pages';
+import { Dashboard, Telecalling, TeamView } from './Pages';
+import Agents from './Agents';
 import { Accounts, Settings, Users } from './Admin';
-import { ROLE_INFO, ROLES, CAN_CREATE } from './constants.js';
+import { ROLE_INFO, ROLES, CAN_CREATE, CAN_PAY, AGENT_CREATE, AGENT_MANAGE } from './constants.js';
 
 const NAV = [
   { path: '/', label: 'Dashboard', icon: Building2, roles: ROLES },
-  { path: '/candidates', label: 'All Candidates', icon: UsersIcon, roles: ROLES },
+  { path: '/candidates', label: 'Candidates', icon: UsersIcon, roles: ROLES },
   { path: '/new', label: 'New Candidate (Full Form)', icon: UserPlus, roles: CAN_CREATE },
   { path: '/followups', label: "Today's Follow-ups", icon: CalendarClock, roles: ['super_admin', 'telecaller', 'counsellor', 'b2b', 'hr'] },
   { path: '/telecalling', label: 'Telecalling Station', icon: PhoneCall, roles: ['super_admin', 'telecaller', 'counsellor', 'b2b'] },
   { path: '/vault', label: 'Documentation Desk', icon: FileText, roles: ['super_admin', 'documentation'] },
-  { path: '/b2b', label: 'B2B Agents', icon: Briefcase, roles: ['super_admin', 'b2b'] },
-  { path: '/accounts', label: 'Accounts & Invoices', icon: IndianRupee, roles: ['super_admin'] },
+  { path: '/agents', label: 'B2B Agent Register', icon: Briefcase, roles: AGENT_CREATE, badge: 'agents' },
+  { path: '/team', label: 'Team Monitoring (View)', icon: Eye, roles: ['super_admin', 'b2b'] },
+  { path: '/accounts', label: 'Bills & Payments', icon: IndianRupee, roles: [...new Set(['super_admin', ...CAN_PAY])] },
   { path: '/users', label: 'Employee Logins', icon: KeyRound, roles: ['super_admin'] },
   { path: '/settings', label: 'Company Settings', icon: SettingsIcon, roles: ['super_admin'] }
 ];
@@ -57,6 +59,11 @@ function Shell({ user, onLogout }) {
   const [toast, setToast] = useState(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [call, setCall] = useState('');
+  const [unseen, setUnseen] = useState(0);
+  useEffect(() => {
+    if (!AGENT_MANAGE.includes(user.role)) return;
+    api('/agents/summary').then((d) => setUnseen(d.unseen || 0)).catch(() => {});
+  }, [route, user.role]);
 
   const notify = useCallback((msg, type = 'ok') => {
     setToast({ msg, type, id: Date.now() });
@@ -73,21 +80,23 @@ function Shell({ user, onLogout }) {
   else if (parts[0] === 'invoice' && parts[1]) page = <Invoice id={parts[1]} />;
   else if (!allowed('/' + (parts[0] || ''))) page = <div className="p-10 text-center text-sm text-rose-700">Permission denied for your role.</div>;
   else switch (parts[0]) {
-    case 'candidates': page = <div className="space-y-4"><h2 className="text-xl font-bold">All Candidates</h2><CandidateList /></div>; break;
+    case 'candidates': page = (
+      <div className="space-y-4">
+        <h2 className="text-xl font-bold">{user.role === 'super_admin' ? 'All Candidates' : 'My Candidates'}</h2>
+        {user.role !== 'super_admin' && <p className="text-xs text-slate-500">{ROLE_INFO[user.role]?.see}</p>}
+        <CandidateList />
+      </div>); break;
     case 'new': page = <div className="space-y-4"><h2 className="text-xl font-bold">New Candidate Registration</h2><CandidateForm mode="create" /></div>; break;
     case 'followups': page = <div className="space-y-4"><h2 className="text-xl font-bold">Today's & Overdue Follow-ups</h2><CandidateList due="today" /></div>; break;
     case 'telecalling': page = <Telecalling />; break;
     case 'vault': page = (
       <div className="space-y-4">
         <h2 className="text-xl font-bold">Documentation Desk</h2>
-        <p className="text-xs text-slate-600">Candidates whose file is in documentation stage. Open a candidate → <b>Documents</b> tab to upload / verify Aadhaar, PAN, Passport etc.</p>
-        <CandidateList statusFilter="Registered,Advance Payment Received,Documents Pending,Documents Verified,Selected,Offer Letter Sent,Medical Done,Permit Under Process,Visa Applied" />
+        <p className="text-xs text-slate-600">Files handed to Documentation (candidate page → <b>Documentation Staff</b> chosen). Open a candidate → <b>Documents</b> tab to upload / verify, <b>Payments &amp; Bills</b> tab to take payment and make bill.</p>
+        <CandidateList inDoc />
       </div>); break;
-    case 'b2b': page = (
-      <div className="space-y-4">
-        <h2 className="text-xl font-bold">B2B Agents</h2>
-        <p className="text-sm text-slate-600 bg-white border rounded-xl p-4">Candidates coming from agents: register them with <b>Lead Source = B2B Agent</b> and agent name in <b>Referred By</b>. Separate agent ledger & commission module — next phase.</p>
-      </div>); break;
+    case 'agents': page = <Agents />; break;
+    case 'team': page = <TeamView />; break;
     case 'accounts': page = <Accounts />; break;
     case 'users': page = <Users />; break;
     case 'settings': page = <Settings />; break;
@@ -96,7 +105,7 @@ function Shell({ user, onLogout }) {
 
   return (
     <AppCtx.Provider value={ctx}>
-      <div className="min-h-screen bg-slate-100 font-sans text-slate-800 flex flex-col">
+      <div className="app-root min-h-screen bg-slate-100 font-sans text-slate-800 flex flex-col">
         <header className="bg-blue-900 text-white shadow-md px-3 sm:px-6 py-2.5 flex justify-between items-center sticky top-0 z-30">
           <div className="flex items-center gap-3">
             <button className="lg:hidden" onClick={() => setMenuOpen(!menuOpen)}>{menuOpen ? <X /> : <Menu />}</button>
@@ -126,12 +135,13 @@ function Shell({ user, onLogout }) {
         <div className="flex flex-1">
           <aside className={`${menuOpen ? 'block' : 'hidden'} lg:block fixed lg:static inset-y-0 top-[60px] left-0 z-20 w-64 bg-white border-r overflow-y-auto`}>
             <nav className="p-3 space-y-1">
-              {nav.map(({ path, label, icon: Icon }) => {
+              {nav.map(({ path, label, icon: Icon, badge }) => {
                 const active = path === '/' ? route === '/' : route.startsWith(path);
                 return (
                   <button key={path} onClick={() => { go(path); setMenuOpen(false); }}
                     className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium ${active ? 'bg-blue-900 text-white' : 'text-slate-600 hover:bg-slate-100'}`}>
-                    <Icon className="w-4 h-4" /> {label}
+                    <Icon className="w-4 h-4" /> <span className="flex-1 text-left">{label}</span>
+                    {badge === 'agents' && unseen > 0 && <span className="bg-rose-600 text-white text-[10px] font-bold rounded-full px-1.5 py-0.5">{unseen} new</span>}
                   </button>
                 );
               })}

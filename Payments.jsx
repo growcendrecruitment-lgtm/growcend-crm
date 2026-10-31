@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Printer, XCircle, IndianRupee } from 'lucide-react';
+import { Printer, XCircle, IndianRupee, AlertTriangle } from 'lucide-react';
 import { api } from './api';
 import { Section, Field, Select, Input, Btn, Empty, Grid, fmtDate, inr, go, useApp, todayInput } from './ui';
 import { PAY_MODES, PAY_PURPOSES, CAN_PAY } from './constants.js';
@@ -11,7 +11,12 @@ export default function Payments({ lead, reload }) {
   const empty = { amount: '', date: todayInput(), mode: '', reference: '', purpose: '', description: '' };
   const [f, setF] = useState(empty);
   const [saving, setSaving] = useState(false);
-  const canPay = CAN_PAY.includes(user.role);
+  const canPay = CAN_PAY.includes(user.role) && lead._canEdit;
+  const [settings, setSettings] = useState(null);
+  useEffect(() => { api('/settings').then(setSettings).catch(() => {}); }, []);
+  const c = settings?.company || {};
+  const gstOn = !!settings?.invoice?.gstEnabled;
+  const setupMissing = settings && (!c.address || !c.state || (gstOn && !c.gstin));
 
   const load = useCallback(() => api(`/leads/${lead._id}/payments`).then(setItems).catch((e) => notify(e.message, 'error')), [lead._id, notify]);
   useEffect(() => { load(); }, [load]);
@@ -61,6 +66,13 @@ export default function Payments({ lead, reload }) {
         <div className="bg-white border rounded-xl p-4"><p className="text-xs text-slate-500">Total Paid</p><p className="text-xl font-black text-emerald-700">{inr(lead.paidAmount)}</p></div>
         <div className="bg-white border rounded-xl p-4"><p className="text-xs text-slate-500">Balance Due</p><p className={`text-xl font-black ${due > 0 ? 'text-rose-700' : 'text-slate-700'}`}>{inr(Math.max(0, due))}</p></div>
       </div>
+
+      {canPay && (setupMissing || !lead.address?.state) && (
+        <div className="bg-amber-50 border border-amber-300 rounded-lg p-3 text-xs text-amber-900 space-y-1">
+          {setupMissing && <div className="flex gap-1.5"><AlertTriangle className="w-3.5 h-3.5 shrink-0" /> Company address / State{gstOn ? ' / GSTIN' : ''} not filled in <b>Company Settings</b> — bill will be incomplete. {user.role === 'super_admin' ? <button className="underline" onClick={() => go('/settings')}>Fill now</button> : 'Ask Director to fill it.'}</div>}
+          {!lead.address?.state && gstOn && <div className="flex gap-1.5"><AlertTriangle className="w-3.5 h-3.5 shrink-0" /> Candidate's <b>State</b> is empty (Profile → Address). Bill will take CGST + SGST. Fill State first if candidate is from another state (then IGST).</div>}
+        </div>
+      )}
 
       {canPay && (
         <Section title="Receive Payment (Bill auto-generates)">

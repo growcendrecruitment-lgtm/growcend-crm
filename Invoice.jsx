@@ -2,12 +2,19 @@ import React, { useEffect, useState } from 'react';
 import { Printer, ArrowLeft } from 'lucide-react';
 import { api } from './api';
 import { Btn, Empty, fmtDate, inr, go } from './ui';
-import { amountInWords } from './constants.js';
+import { amountInWords, stateWithCode } from './constants.js';
 
 export default function Invoice({ id }) {
   const [d, setD] = useState(null);
   const [err, setErr] = useState('');
   useEffect(() => { api(`/payments/${id}`).then(setD).catch((e) => setErr(e.message)); }, [id]);
+  // PDF file name = bill number (when you choose "Save as PDF")
+  useEffect(() => {
+    if (!d) return undefined;
+    const old = document.title;
+    document.title = `${d.payment.invoiceNo.replace(/\//g, '-')} ${d.payment.billTo?.name || ''}`.trim();
+    return () => { document.title = old; };
+  }, [d]);
   if (err) return <Empty>{err}</Empty>;
   if (!d) return <Empty>Loading…</Empty>;
 
@@ -22,7 +29,10 @@ export default function Invoice({ id }) {
     <div className="space-y-3">
       <div className="no-print flex flex-wrap gap-2 justify-between items-center">
         <button onClick={() => go(`/candidate/${p.lead}/payments`)} className="text-xs text-blue-900 flex items-center gap-1"><ArrowLeft className="w-4 h-4" /> Back to candidate</button>
-        <Btn onClick={() => window.print()}><Printer className="w-4 h-4" /> Print / Save as PDF</Btn>
+        <div className="flex items-center gap-2">
+          <span className="text-[11px] text-slate-500 hidden sm:inline">PDF: Print → Destination “Save as PDF”</span>
+          <Btn onClick={() => window.print()}><Printer className="w-4 h-4" /> Print / Save as PDF</Btn>
+        </div>
       </div>
       {missingSetup && (
         <div className="no-print bg-amber-50 border border-amber-300 text-amber-900 text-xs rounded p-2">
@@ -33,7 +43,9 @@ export default function Invoice({ id }) {
       <div className="invoice bg-white mx-auto shadow border p-8 max-w-[210mm] text-[13px] text-slate-800 relative">
         {p.cancelled && <div className="absolute inset-0 flex items-center justify-center pointer-events-none"><span className="text-7xl font-black text-rose-500/30 -rotate-12">CANCELLED</span></div>}
 
-        <div className="flex justify-between items-start border-b-2 border-blue-900 pb-3">
+        <div className="flex justify-between items-start border-b-2 border-blue-900 pb-3 gap-4">
+          <div className="flex gap-3 items-start">
+          {c.logo && <img src={c.logo} alt="" onError={(e) => { e.currentTarget.style.display = 'none'; }} className="h-16 w-16 object-contain shrink-0" />}
           <div>
             <h1 className="text-xl font-extrabold text-blue-900">{c.name}</h1>
             <p className="text-xs whitespace-pre-line">{[c.address, [c.city, c.state, c.pincode].filter(Boolean).join(', ')].filter(Boolean).join('\n')}</p>
@@ -41,11 +53,13 @@ export default function Invoice({ id }) {
             <p className="text-xs font-semibold">{[c.gstin && `GSTIN: ${c.gstin}`, c.pan && `PAN: ${c.pan}`, c.cin && `CIN: ${c.cin}`].filter(Boolean).join(' · ')}</p>
             {c.raLicense && <p className="text-xs">Recruiting Agent Licence No: {c.raLicense}</p>}
           </div>
+          </div>
           <div className="text-right">
             <h2 className="text-lg font-black tracking-wide">{title}</h2>
             <p className="text-xs">No: <b>{p.invoiceNo}</b></p>
             <p className="text-xs">Date: <b>{fmtDate(p.date)}</b></p>
-            {g.applied && <p className="text-xs">Place of Supply: {p.billTo?.state || c.state || '—'}</p>}
+            {g.applied && <p className="text-xs">Place of Supply: {stateWithCode(p.billTo?.state || c.state) || '—'}</p>}
+            {g.applied && <p className="text-xs">Reverse Charge: No</p>}
           </div>
         </div>
 
@@ -55,6 +69,7 @@ export default function Invoice({ id }) {
             <p className="font-bold">{p.billTo?.name}</p>
             <p className="text-xs">{p.billTo?.address}{p.billTo?.pincode && ` – ${p.billTo.pincode}`}</p>
             <p className="text-xs">Mobile: {p.billTo?.phone}</p>
+            {g.applied && p.billTo?.state && <p className="text-xs">State: {stateWithCode(p.billTo.state)}</p>}
           </div>
           <div className="text-xs text-right">
             <p>Candidate ID: <b>{p.billTo?.leadId}</b></p>
@@ -85,11 +100,12 @@ export default function Invoice({ id }) {
         <p className="text-xs mt-2"><b>Amount in words:</b> {amountInWords(p.amount)}</p>
         <p className="text-xs">Payment Mode: {p.mode}{p.reference && ` (Ref: ${p.reference})`}</p>
 
-        {lead && lead.packageAmount > 0 && (
-          <div className="mt-3 text-xs border rounded p-2 bg-slate-50 grid grid-cols-3 gap-2">
+        {lead && lead.packageAmount > 0 && !p.cancelled && (
+          <div className="mt-3 text-xs border rounded p-2 bg-slate-50 grid grid-cols-2 sm:grid-cols-4 gap-2">
             <div>Total Package: <b>{inr(lead.packageAmount)}</b></div>
-            <div>Paid till date: <b>{inr(lead.paidAmount)}</b></div>
-            <div>Balance: <b>{inr(Math.max(0, lead.packageAmount - lead.paidAmount))}</b></div>
+            <div>This Bill: <b>{inr(p.amount)}</b></div>
+            <div>Paid till this bill: <b>{inr(lead.paidTill ?? lead.paidAmount)}</b></div>
+            <div>Balance: <b>{inr(Math.max(0, lead.packageAmount - (lead.paidTill ?? lead.paidAmount)))}</b></div>
           </div>
         )}
 
@@ -107,6 +123,7 @@ export default function Invoice({ id }) {
           </div>
           <div className="text-right self-end">
             <p>For <b>{c.name}</b></p>
+            <p className="text-[10px] text-slate-400">Received by: {p.createdByName}</p>
             <div className="h-14" />
             <p className="border-t inline-block pt-1">Authorised Signatory</p>
           </div>
